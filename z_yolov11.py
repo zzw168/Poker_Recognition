@@ -4,98 +4,12 @@ from ultralytics import YOLO
 import cv2
 import threading
 import time
-import numpy as np
 import os
 import socket
-# from socket import *
-import json
-# http
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import python_trt as myTr
-
-from skimage import io
-from skimage.color import rgb2gray
-from skimage.transform import resize
 import numpy as np
-
-from skimage.metrics import structural_similarity as ssim
-
-import inspect
-
-import ctypes
-
-
-def ssimImage(img1, img2):  # 比较两张图片的相似性
-    # 加载两张图片
-    imageA = io.imread(img1)
-
-    imageB = img2
-
-    imageB = resize(imageB, imageA.shape, anti_aliasing=True)
-
-    # 如果图像是RGBA，去除Alpha通道
-    if imageA.shape[-1] == 4:
-        imageA = imageA[..., :3]
-    if imageB.shape[-1] == 4:
-        imageB = imageB[..., :3]
-
-    # 转换为灰度图像
-    imageA_gray = rgb2gray(imageA)
-    imageB_gray = rgb2gray(imageB)
-
-    # 将像素值从[0, 1]映射到[0, 255]，并转换数据类型为uint8
-    imageA_gray = (imageA_gray * 255).astype(np.uint8)
-    imageB_gray = (imageB_gray * 255).astype(np.uint8)
-
-    imageA_gray = cv2.Canny(imageA_gray, 100, 200)  # 还原出清晰的边缘
-    imageB_resized = cv2.Canny(imageB_gray, 100, 200)  # 还原出清晰的边缘
-
-    return ssim(imageA_gray, imageB_resized, data_range=imageB_resized.max() - imageB_resized.min())
-
-
-def is_camera_black_screen(frame):  # 判断是否黑屏
-    frame22 = frame.copy()
-    # 将图像转换为灰度图像以便处理
-    gray = cv2.cvtColor(frame22, cv2.COLOR_BGR2GRAY)
-    # 计算图像的平均亮度
-    mean_brightness = cv2.mean(gray)[0]
-    # 设置阈值来判断图像是否几乎全是黑色
-    threshold = 10
-
-    if mean_brightness < threshold or int(mean_brightness) == 0:
-        return True
-    return False
-
-
-def set_cap(cap):  # 设置视频截图参数（不压缩图片，节省压缩过程时间）
-    W = 1920
-    H = 1080
-    fps = 15
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-    W1 = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    H1 = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    fps1 = cap.get(cv2.CAP_PROP_FPS)
-    print(f"设置{W1}*{H1}  FPS={fps1}")
-
-
-def filter_max_value(lists):  # 在区域范围内如果出现两个相同的球，则取置信度最高的球为准
-    max_values = {}
-    for sublist in lists:
-        value, key = sublist[4], sublist[5]
-        if key not in max_values or max_values[key] < value:
-            max_values[key] = value
-    filtered_list = []
-    for sublist in lists:
-        fifth_element = sublist[4]
-        sixth_element = sublist[5]
-        max_value_for_sixth_element = max_values[sixth_element]
-        if fifth_element == max_value_for_sixth_element:  # 选取置信度最大的球添加到修正后的队列
-            filtered_list.append(sublist)
-    return filtered_list
 
 
 def z_udp(send_data, address):
@@ -165,80 +79,6 @@ def deal_area(ball_array, img, code):  # 处理该摄像头内区域
     return ball_area_array, img
 
 
-def camera_create():  # 初始化摄像头变量
-    global cap_array
-    global camera_frame_array
-    for cap_num in range(0, camera_num):
-        cap = cv2.VideoCapture(cap_num, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            print(f'无法打开摄像头{cap_num}')
-            continue
-        set_cap(cap)
-        ret, frame = cap.read()
-        if not ret:
-            print(f'无法读取画面{cap_num}')
-            continue
-
-        cv2.imwrite(f"{cap_num}.jpg", frame)  # 保存摄像头一帧图片
-        cap_array[cap_num] = cap
-        camera_frame_array[cap_num] = frame
-    camera_restart_thread.start()  # 开启线程，黑屏即重启摄像头
-
-
-def camera_restart():  # 重启摄像头
-    global cap_array
-    global camera_frame_array
-    while True:
-        if not run_flg:  # 倒计时运行标志
-            continue
-        time.sleep(10)
-        for cap_num in camera_frame_array.keys():
-            if is_camera_black_screen(camera_frame_array[cap_num]):
-                print('重连摄像头 %s' % cap_num)
-                cap_array[cap_num].release()
-                cap_array[cap_num] = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-                set_cap(cap_array[cap_num])
-
-
-def deal_threads(cap, cap_num):
-    global camera_frame_array
-    color = (0, 255, 0)
-    model = YOLO("best.pt")
-    names = {0: 'huang', 1: 'xuelan', 2: 'hei', 3: 'cheng', 4: 'tianLan', 5: 'shenLan', 6: 'bai',
-             7: 'hong',
-             8: 'zong', 9: 'lv', 10: 'xx_s_yello', 11: 'xx_s_white', 12: 'xx_s_red', 13: 'xx_s_black'}
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("读取帧失败")
-            continue
-        results = model.predict(source=frame, show=False, conf=0.5, iou=0.45, imgsz=1280)
-        qiu_array = []
-        if len(results) != 0:  # 整合球的数据
-            # names = results[0].names
-            result = results[0].boxes.data
-
-            for r in result:
-                if int(r[5].item()) < 10:
-                    array = [int(r[0].item()), int(r[1].item()), int(r[2].item()), int(r[3].item()),
-                             round(r[4].item(), 2), names[int(r[5].item())]]
-                    cv2.rectangle(frame, (array[0], array[1]), (array[2], array[3]), color, thickness=3)
-                    cv2.putText(frame, "%s %s" % (array[5], str(array[4])), (array[0], array[1] - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                fontScale=1,
-                                color=(0, 0, 255), thickness=2)
-                    qiu_array.append(array)
-        if len(qiu_array):  # 处理范围内跟排名
-            # print("处理范围内排名")
-            qiu_array, frame = deal_area(qiu_array, frame, cap_num)  # 统计各个范围内的球，并绘制多边形
-            camera_frame_array[cap_num] = frame
-            if len(qiu_array) > 0:
-                qiu_array = filter_max_value(qiu_array)
-                z_udp(str(qiu_array), server_self_rank)  # 发送数据s
-        else:
-            camera_frame_array[cap_num] = frame
-
-
 def deal_simple():
     global camera_frame_array
     global run_flg
@@ -286,7 +126,6 @@ def deal_simple():
                 camera_frame_array[cap_num] = frame
             if len(qiu_array) > 0:
                 integration_qiu_array.extend(qiu_array)
-                integration_qiu_array = filter_max_value(integration_qiu_array)
                 z_udp(str(integration_qiu_array), server_self_rank)  # 发送数据s
             else:
                 camera_frame_array[cap_num] = frame
@@ -379,10 +218,6 @@ if __name__ == "__main__":
     for i in range(0, camera_num):
         cap_array[i] = None
         camera_frame_array[i] = None
-
-    # 重启线程
-    camera_restart_thread = threading.Thread(target=camera_restart, daemon=True)
-    camera_create()
 
     # 显示线程
     show_thread = threading.Thread(target=show_map, daemon=True)
