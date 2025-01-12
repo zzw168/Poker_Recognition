@@ -1,4 +1,8 @@
-import copy
+import win32gui
+import win32ui
+import win32con
+import win32api
+from PIL import Image, ImageChops
 
 from ultralytics import YOLO
 import cv2
@@ -10,6 +14,72 @@ import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
+
+
+def enum_windows_callback(hwnd, windows_list):
+    """
+    枚举顶层窗口的回调函数，用于收集带有₮字符的窗口句柄和标题。
+    """
+    title = win32gui.GetWindowText(hwnd)
+    if "₮" in title:  # 筛选包含 ₮ 字符的窗口
+        windows_list.append((hwnd, title))
+
+
+def get_windows_with_special_char():
+    """
+    获取所有包含 ₮ 字符的窗口句柄和标题。
+    """
+    windows = []
+    win32gui.EnumWindows(enum_windows_callback, windows)
+    return windows
+
+
+def capture_window_as_opencv(hwnd):
+    """
+    截取指定窗口并直接返回 OpenCV 图像。
+    :param hwnd: 窗口句柄
+    :return: OpenCV 图像 (BGR 格式)
+    """
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    width = right - left
+    height = bottom - top
+
+    hwnd_dc = win32gui.GetWindowDC(hwnd)
+    mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+    save_dc = mfc_dc.CreateCompatibleDC()
+    save_bitmap = win32ui.CreateBitmap()
+    save_bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+    save_dc.SelectObject(save_bitmap)
+
+    save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
+    bmp_bits = save_bitmap.GetBitmapBits(True)
+
+    img_array = np.frombuffer(bmp_bits, dtype=np.uint8)
+    img_array = img_array.reshape((height, width, 4))  # BGRA 格式
+    img_bgr = cv2.cvtColor(img_array, cv2.COLOR_BGRA2BGR)
+
+    win32gui.DeleteObject(save_bitmap.GetHandle())
+    save_dc.DeleteDC()
+    mfc_dc.DeleteDC()
+    win32gui.ReleaseDC(hwnd, hwnd_dc)
+
+    return img_bgr
+
+
+def images_are_different(image1, image2, threshold=5000):
+    """
+    比较两张图像是否不同。
+    :param image1: 第一张图像
+    :param image2: 第二张图像
+    :param threshold: 差异值阈值
+    :return: 是否不同 (布尔值)
+    """
+    if image1 is None or image2 is None:
+        return True  # 如果其中一张图像为空，认为不同
+
+    diff = cv2.absdiff(image1, image2)  # 计算差异图像
+    diff_sum = np.sum(diff)  # 计算差异值的总和
+    return diff_sum > threshold  # 判断是否超过阈值
 
 
 def z_udp(send_data, address):
@@ -84,54 +154,66 @@ def deal_simple():
     global run_flg
     color = (0, 255, 0)
     model = YOLO("best.pt")
-    # model = myTr.Detector(model_path=b"./best8.engine", dll_path="./trt/yolov8.dll")
-    names = {0: 'yellow', 1: 'blue', 2: 'red', 3: 'purple', 4: 'orange', 5: 'green', 6: 'Brown',
-             7: 'black',
-             8: 'pink', 9: 'White', 10: 'xx_s_yello', 11: 'xx_s_white', 12: 'xx_s_red',
-             13: 'xx_s_black'}
-
+    # 用于存储每个窗口的前一张图片
+    previous_images = {}
     while True:
         if not run_flg:  # 倒计时运行标志
+            time.sleep(0.1)  # 等待 100 毫秒
             continue
-        if time.time() > run_time:
-            run_flg = False
-        integration_qiu_array = []
-        for cap_num in range(0, len(cap_array)):
-            ret, frame = cap_array[cap_num].read()
-            if not ret:
-                print("读取帧失败")
-                continue
 
-            # result = model.predict(frame)
-            # results = model.visualize(result)
-            results = model.predict(source=frame, show=False, conf=0.5, iou=0.45, imgsz=1280)
-            qiu_array = []
-            if len(results) != 0:  # 整合球的数据
-                # names = results[0].names
-                result = results[0].boxes.data
+        # 获取所有包含 ₮ 的窗口
+        special_windows = get_windows_with_special_char()
+        if not special_windows:
+            print("未找到包含 ₮ 字符的窗口。")
+            continue
 
-                for r in result:
-                    if int(r[5].item()) < 10:
-                        array = [int(r[0].item()), int(r[1].item()), int(r[2].item()), int(r[3].item()),
-                                 round(r[4].item(), 2), names[int(r[5].item())]]
-                        cv2.rectangle(frame, (array[0], array[1]), (array[2], array[3]), color, thickness=3)
-                        cv2.putText(frame, "%s %s" % (array[5], str(array[4])), (array[0], array[1] - 5),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    fontScale=1,
-                                    color=(0, 0, 255), thickness=2)
-                        qiu_array.append(array)
-            if len(qiu_array):  # 处理范围内跟排名
-                # print("处理范围内排名")
-                qiu_array, frame = deal_area(qiu_array, frame, cap_num)  # 统计各个范围内的球，并绘制多边形
-                camera_frame_array[cap_num] = frame
-            if len(qiu_array) > 0:
-                integration_qiu_array.extend(qiu_array)
-                z_udp(str(integration_qiu_array), server_self_rank)  # 发送数据s
+        for idx, (hwnd, title) in enumerate(special_windows):
+            # try:
+            # 截取当前窗口的图片
+            current_image = capture_window_as_opencv(hwnd)
+
+            # 获取前一张图片
+            prev_image = previous_images.get(hwnd)
+
+            # 如果没有前一张图片，或者图片不同，则保存
+            if prev_image is None or images_are_different(prev_image, current_image):
+                results = model.predict(source=current_image, show=False, conf=0.5, iou=0.45, imgsz=1280)
+                qiu_array = []
+                if len(results) != 0:  # 整合球的数据
+                    names = results[0].names
+                    result = results[0].boxes.data
+
+                    for r in result:
+                        if int(r[5].item()) < 10:
+                            array = [int(r[0].item()), int(r[1].item()), int(r[2].item()), int(r[3].item()),
+                                     round(r[4].item(), 2), names[int(r[5].item())]]
+                            cv2.rectangle(current_image, (array[0], array[1]), (array[2], array[3]), color, thickness=1)
+                            cv2.putText(current_image, "%s %s" % (array[5], str(array[4])), (array[0], array[1] - 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        fontScale=1,
+                                        color=(0, 0, 255), thickness=1)
+                            qiu_array.append(array)
+                cv2.imshow("YOLO Inference Result", current_image)
+
+                camera_frame_array[idx] = current_image
+                print(qiu_array)
+
+                # 更新前一张图片
+                previous_images[hwnd] = current_image
             else:
-                camera_frame_array[cap_num] = frame
-        # if len(integration_qiu_array) > 0:
-        #     integration_qiu_array = filter_max_value(integration_qiu_array)
-        #     z_udp(str(integration_qiu_array), server_self_rank)  # 发送数据s
+                print(f"窗口 {title} 的内容未变化，跳过保存。")
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    cv2.destroyAllWindows()
+    # except Exception as e:
+    #     print(f"无法截取窗口 {title}，错误: {e}")
+
+    # result = model.predict(frame)
+    # results = model.visualize(result)
+
+    # if len(integration_qiu_array) > 0:
+    #     integration_qiu_array = filter_max_value(integration_qiu_array)
+    #     z_udp(str(integration_qiu_array), server_self_rank)  # 发送数据s
 
 
 def show_map():
@@ -151,23 +233,23 @@ def show_map():
                 cv2.namedWindow("display", cv2.WINDOW_NORMAL)
                 cv2.resizeWindow("display", 1100, 1200)
                 show_flg = True
-        canvas = np.zeros((1080 + target_height * 2, 1920, 3), dtype=np.uint8)  # 三元色，对应的三维数组
+        canvas = np.zeros((1080 + target_height, 1920, 3), dtype=np.uint8)  # 三元色，对应的三维数组
         canvas[0:target_height, 0: target_width] = cv2.resize(camera_frame_array[0],
                                                               (target_width, target_height))
-        canvas[target_height:1080, 0: target_width] = cv2.resize(camera_frame_array[1],
-                                                                 (target_width, target_height))
-        canvas[1080:1080 + target_height, 0: target_width] = cv2.resize(camera_frame_array[2],
-                                                                        (target_width, target_height))
-        canvas[1080 + target_height:2160, 0: target_width] = cv2.resize(camera_frame_array[6],
-                                                                        (target_width, target_height))
-        canvas[0:target_height, target_width: 1920] = cv2.resize(camera_frame_array[3],
-                                                                 (target_width, target_height))
-        canvas[target_height:1080, target_width: 1920] = cv2.resize(camera_frame_array[4],
-                                                                    (target_width, target_height))
-        canvas[1080:1080 + target_height, target_width: 1920] = cv2.resize(camera_frame_array[5],
-                                                                           (target_width, target_height))
-        canvas[1080 + target_height:2160, target_width: 1920] = cv2.resize(camera_frame_array[7],
-                                                                           (target_width, target_height))
+        # canvas[target_height:1080, 0: target_width] = cv2.resize(camera_frame_array[1],
+        #                                                          (target_width, target_height))
+        # canvas[1080:1080 + target_height, 0: target_width] = cv2.resize(camera_frame_array[2],
+        #                                                                 (target_width, target_height))
+        # canvas[1080 + target_height:2160, 0: target_width] = cv2.resize(camera_frame_array[6],
+        #                                                                 (target_width, target_height))
+        # canvas[0:target_height, target_width: 1920] = cv2.resize(camera_frame_array[3],
+        #                                                          (target_width, target_height))
+        # canvas[target_height:1080, target_width: 1920] = cv2.resize(camera_frame_array[4],
+        #                                                             (target_width, target_height))
+        # canvas[1080:1080 + target_height, target_width: 1920] = cv2.resize(camera_frame_array[5],
+        #                                                                    (target_width, target_height))
+        # canvas[1080 + target_height:2160, target_width: 1920] = cv2.resize(camera_frame_array[7],
+        #                                                                    (target_width, target_height))
 
         cv2.imshow("display", canvas)
 
@@ -220,8 +302,8 @@ if __name__ == "__main__":
         camera_frame_array[i] = None
 
     # 显示线程
-    show_thread = threading.Thread(target=show_map, daemon=True)
-    show_thread.start()
+    # show_thread = threading.Thread(target=show_map, daemon=True)
+    # show_thread.start()
 
     # 启动 HTTPServer 接收外部命令控制本程序
     httpServer_addr = ('0.0.0.0', 8081)  # 接收网络数据包控制
