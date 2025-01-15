@@ -1,8 +1,8 @@
+from typing import Any
+
 import win32gui
 import win32ui
 import win32con
-import win32api
-from PIL import Image, ImageChops
 
 from ultralytics import YOLO
 import cv2
@@ -168,46 +168,49 @@ def deal_simple():
             continue
 
         for idx, (hwnd, title) in enumerate(special_windows):
-            # try:
-            # 截取当前窗口的图片
-            current_image = capture_window_as_opencv(hwnd)
+            try:
+                # 截取当前窗口的图片
+                current_image = capture_window_as_opencv(hwnd)
 
-            # 获取前一张图片
-            prev_image = previous_images.get(hwnd)
+                # 获取前一张图片
+                prev_image = previous_images.get(hwnd)
 
-            # 如果没有前一张图片，或者图片不同，则保存
-            if prev_image is None or images_are_different(prev_image, current_image):
-                results = model.predict(source=current_image, show=False, conf=0.5, iou=0.45, imgsz=1280)
-                qiu_array = []
-                if len(results) != 0:  # 整合球的数据
-                    names = results[0].names
-                    result = results[0].boxes.data
+                # 如果没有前一张图片，或者图片不同，则保存
+                if prev_image is None or images_are_different(prev_image, current_image):
+                    results = model.predict(source=current_image, show=False, conf=0.3, iou=0.2, imgsz=1472)
+                    qiu_array = []
+                    if len(results) != 0:  # 整合球的数据
+                        names = results[0].names
+                        result = results[0].boxes.data
 
-                    for r in result:
-                        if int(r[5].item()) < 10:
+                        for r in result:
+
                             array = [int(r[0].item()), int(r[1].item()), int(r[2].item()), int(r[3].item()),
                                      round(r[4].item(), 2), names[int(r[5].item())]]
-                            cv2.rectangle(current_image, (array[0], array[1]), (array[2], array[3]), color, thickness=1)
-                            cv2.putText(current_image, "%s %s" % (array[5], str(array[4])), (array[0], array[1] - 5),
+                            cv2.rectangle(current_image, (array[0], array[1]), (array[2], array[3]), color,
+                                          thickness=1)
+                            cv2.putText(current_image, "%s" % (array[5]),
+                                        (array[0], array[1] - 5),
                                         cv2.FONT_HERSHEY_SIMPLEX,
-                                        fontScale=1,
+                                        fontScale=0.5,
                                         color=(0, 0, 255), thickness=1)
                             qiu_array.append(array)
-                cv2.imshow("YOLO Inference Result", current_image)
 
-                camera_frame_array[idx] = current_image
-                print(qiu_array)
 
-                # 更新前一张图片
-                previous_images[hwnd] = current_image
-            else:
-                print(f"窗口 {title} 的内容未变化，跳过保存。")
+
+                    cv2.imshow("YOLO Inference Result", current_image)
+                    camera_frame_array[idx] = current_image
+                    print(qiu_array)
+
+                    # 更新前一张图片
+                    previous_images[hwnd] = current_image
+                else:
+                    print(f"窗口 {title} 的内容未变化，跳过保存。")
+            except Exception as e:
+                print(f"无法截取窗口 {title}，错误: {e}")
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
     cv2.destroyAllWindows()
-    # except Exception as e:
-    #     print(f"无法截取窗口 {title}，错误: {e}")
-
     # result = model.predict(frame)
     # results = model.visualize(result)
 
@@ -234,8 +237,8 @@ def show_map():
                 cv2.resizeWindow("display", 1100, 1200)
                 show_flg = True
         canvas = np.zeros((1080 + target_height, 1920, 3), dtype=np.uint8)  # 三元色，对应的三维数组
-        canvas[0:target_height, 0: target_width] = cv2.resize(camera_frame_array[0],
-                                                              (target_width, target_height))
+        if not (camera_frame_array[0] is None):
+            canvas[0:928, 0: 1280] = cv2.resize(camera_frame_array[0], (1280, 928))
         # canvas[target_height:1080, 0: target_width] = cv2.resize(camera_frame_array[1],
         #                                                          (target_width, target_height))
         # canvas[1080:1080 + target_height, 0: target_width] = cv2.resize(camera_frame_array[2],
@@ -299,7 +302,7 @@ if __name__ == "__main__":
 
     for i in range(0, camera_num):
         cap_array[i] = None
-        camera_frame_array[i] = None
+        camera_frame_array[i] = np.zeros((100, 100, 3), dtype=np.uint8)
 
     # 显示线程
     # show_thread = threading.Thread(target=show_map, daemon=True)
