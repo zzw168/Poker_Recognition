@@ -199,7 +199,7 @@ def deal_simple():
 
 
                     cv2.imshow("YOLO Inference Result", current_image)
-                    camera_frame_array[idx] = current_image
+                    # camera_frame_array[idx] = current_image
                     print(qiu_array)
 
                     # 更新前一张图片
@@ -238,7 +238,7 @@ def show_map():
                 show_flg = True
         canvas = np.zeros((1080 + target_height, 1920, 3), dtype=np.uint8)  # 三元色，对应的三维数组
         if not (camera_frame_array[0] is None):
-            canvas[0:928, 0: 1280] = cv2.resize(camera_frame_array[0], (1280, 928))
+            canvas[0:1056, 0:1453 ] = cv2.resize(camera_frame_array[0], (1453, 1056))
         # canvas[target_height:1080, 0: target_width] = cv2.resize(camera_frame_array[1],
         #                                                          (target_width, target_height))
         # canvas[1080:1080 + target_height, 0: target_width] = cv2.resize(camera_frame_array[2],
